@@ -20,17 +20,31 @@ interface Article {
   topics: { name: string } | null;
 }
 
+interface Briefing {
+  id: string;
+  content: string;
+  created_at: string;
+}
+
 export default function MyFeed() {
   const [articles, setArticles] = useState<Article[]>([]);
   const [topics, setTopics] = useState<Topic[]>([]);
+  const [briefing, setBriefing] = useState<Briefing | null>(null);
   const [newTopic, setNewTopic] = useState("");
   const [adding, setAdding] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // Email subscription state
+  const [digestEmail, setDigestEmail] = useState<string | null>(null);
+  const [emailInput, setEmailInput] = useState("");
+  const [savingEmail, setSavingEmail] = useState(false);
+
   useEffect(() => {
     fetchTopics();
     fetchArticles();
+    fetchBriefing();
+    fetchSubscription();
   }, []);
 
   async function fetchTopics() {
@@ -53,6 +67,22 @@ export default function MyFeed() {
 
     if (data) setArticles(data as unknown as Article[]);
     setLoading(false);
+  }
+
+  async function fetchBriefing() {
+    const res = await fetch(`/api/briefing?user_id=${USER_ID}`);
+    if (res.ok) {
+      const { briefing: b } = await res.json();
+      if (b) setBriefing(b);
+    }
+  }
+
+  async function fetchSubscription() {
+    const res = await fetch(`/api/subscribe?user_id=${USER_ID}`);
+    if (res.ok) {
+      const { digest_email } = await res.json();
+      setDigestEmail(digest_email);
+    }
   }
 
   async function addTopic() {
@@ -81,7 +111,6 @@ export default function MyFeed() {
 
     if (!error) {
       setTopics((prev) => prev.filter((t) => t.id !== id));
-      // Remove articles for this topic from the local list
       setArticles((prev) => prev.filter((a) => {
         const articleTopicName = a.topics?.name;
         const removedTopic = topics.find((t) => t.id === id);
@@ -99,11 +128,41 @@ export default function MyFeed() {
         body: JSON.stringify({ user_id: USER_ID }),
       });
       if (res.ok) {
-        await fetchArticles();
+        await Promise.all([fetchArticles(), fetchBriefing()]);
       }
     } finally {
       setRefreshing(false);
     }
+  }
+
+  async function saveEmail() {
+    const email = emailInput.trim();
+    if (!email) return;
+
+    setSavingEmail(true);
+    const res = await fetch("/api/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: USER_ID, digest_email: email }),
+    });
+    if (res.ok) {
+      setDigestEmail(email);
+      setEmailInput("");
+    }
+    setSavingEmail(false);
+  }
+
+  async function unsubscribe() {
+    setSavingEmail(true);
+    const res = await fetch("/api/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: USER_ID, digest_email: null }),
+    });
+    if (res.ok) {
+      setDigestEmail(null);
+    }
+    setSavingEmail(false);
   }
 
   return (
@@ -175,6 +234,66 @@ export default function MyFeed() {
           </button>
         </form>
       </section>
+
+      {/* Email subscription */}
+      <section className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+        <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50 mb-3">
+          Daily Email Digest
+        </h2>
+        {digestEmail ? (
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">
+              Sending daily digest to{" "}
+              <span className="font-medium text-zinc-900 dark:text-zinc-50">{digestEmail}</span>
+            </p>
+            <button
+              onClick={unsubscribe}
+              disabled={savingEmail}
+              className="text-sm text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 font-medium disabled:opacity-50 transition-colors"
+            >
+              {savingEmail ? "Saving..." : "Unsubscribe"}
+            </button>
+          </div>
+        ) : (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              saveEmail();
+            }}
+            className="flex gap-2"
+          >
+            <input
+              type="email"
+              value={emailInput}
+              onChange={(e) => setEmailInput(e.target.value)}
+              placeholder="you@example.com"
+              className="flex-1 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-50 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:focus:ring-zinc-500"
+            />
+            <button
+              type="submit"
+              disabled={savingEmail || !emailInput.trim()}
+              className="rounded-lg bg-zinc-900 dark:bg-zinc-50 px-4 py-2 text-sm font-medium text-white dark:text-zinc-900 hover:bg-zinc-700 dark:hover:bg-zinc-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {savingEmail ? "Saving..." : "Subscribe"}
+            </button>
+          </form>
+        )}
+      </section>
+
+      {/* Today's Briefing */}
+      {briefing && (
+        <section className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+          <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50 mb-2">
+            Today&apos;s Briefing
+          </h2>
+          <p className="text-sm text-zinc-600 dark:text-zinc-400 leading-relaxed">
+            {briefing.content}
+          </p>
+          <p className="mt-2 text-xs text-zinc-400">
+            {new Date(briefing.created_at).toLocaleString()}
+          </p>
+        </section>
+      )}
 
       {/* Articles feed */}
       {loading ? (

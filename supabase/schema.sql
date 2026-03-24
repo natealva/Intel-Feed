@@ -4,6 +4,7 @@
 create table if not exists users (
   id uuid primary key default gen_random_uuid(),
   email text unique not null,
+  digest_email text,
   created_at timestamptz default now()
 );
 
@@ -32,7 +33,15 @@ create table if not exists email_logs (
   status text not null default 'pending'
 );
 
+create table if not exists briefings (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references users(id) on delete cascade not null,
+  content text not null,
+  created_at timestamptz default now()
+);
+
 -- Indexes for common queries
+create index if not exists idx_briefings_user_id on briefings(user_id, created_at desc);
 create index if not exists idx_topics_user_id on topics(user_id);
 create index if not exists idx_articles_user_id on articles(user_id);
 create index if not exists idx_articles_topic_id on articles(topic_id);

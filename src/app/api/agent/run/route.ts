@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { getSupabase } from "@/lib/supabase";
+import { sendDigestEmail } from "@/lib/email";
 
 export async function POST(request: NextRequest) {
   const errors: Array<{ topic?: string; stage: string; message: string }> = [];
@@ -61,6 +62,9 @@ export async function POST(request: NextRequest) {
       published_at: string;
     }> = [];
 
+    // Build a topic id -> name map for email grouping
+    const topicNameMap = new Map(topics.map((t) => [t.id, t.name]));
+
     const debug: Array<Record<string, unknown>> = [];
 
     // For each topic, call Claude with web search to find recent news
@@ -92,7 +96,6 @@ export async function POST(request: NextRequest) {
 
         console.log(`[agent/run] Claude response for "${topic.name}": stop_reason=${response.stop_reason}, content_types=[${contentTypes.join(", ")}], elapsed=${elapsed}ms, usage=${JSON.stringify(response.usage)}`);
 
-        // Log full response content for debugging
         const debugEntry: Record<string, unknown> = {
           topic: topic.name,
           elapsed_ms: elapsed,
@@ -191,10 +194,92 @@ export async function POST(request: NextRequest) {
       console.log(`[agent/run] Inserted ${articles.length} articles successfully`);
     }
 
+    // Generate a briefing summary across all articles
+    let briefing = "";
+    if (articles.length > 0) {
+      try {
+        const articleSummaries = articles
+          .map((a) => `[${topicNameMap.get(a.topic_id) ?? "Unknown"}] ${a.title}: ${a.summary}`)
+          .join("\n");
+
+        const briefingResponse = await anthropic.messages.create({
+          model: "claude-sonnet-4-6",
+          max_tokens: 300,
+          messages: [
+            {
+              role: "user",
+              content: `You are a news briefing writer. Given these articles, write a 3-4 sentence executive summary that captures the most important themes and developments across all topics. Write in a direct, professional tone like a morning intelligence briefing. No bullet points, just a concise paragraph.\n\nArticles:\n${articleSummaries}`,
+            },
+          ],
+        });
+
+        const briefingText = briefingResponse.content.find((b) => b.type === "text");
+        if (briefingText?.type === "text") {
+          briefing = briefingText.text.trim();
+        }
+      } catch (err) {
+        console.error("[agent/run] Briefing generation failed:", err instanceof Error ? err.message : err);
+        errors.push({ stage: "briefing", message: "Failed to generate briefing" });
+      }
+
+      // Save briefing to Supabase
+      if (briefing) {
+        const { error: briefingError } = await supabase
+          .from("briefings")
+          .insert({ user_id, content: briefing });
+
+        if (briefingError) {
+          console.error("[agent/run] Failed to save briefing:", briefingError.message);
+        } else {
+          console.log("[agent/run] Briefing saved successfully");
+        }
+      }
+    }
+
+    // Send digest email if user has a digest_email set
+    let emailSent = false;
+    try {
+      const { data: user } = await supabase
+        .from("users")
+        .select("digest_email")
+        .eq("id", user_id)
+        .single();
+
+      if (user?.digest_email && articles.length > 0 && process.env.RESEND_API_KEY) {
+        const emailArticles = articles.map((a) => ({
+          title: a.title,
+          summary: a.summary,
+          source_url: a.source_url,
+          topic_name: topicNameMap.get(a.topic_id) ?? "Unknown",
+        }));
+
+        const result = await sendDigestEmail(user.digest_email, emailArticles, briefing);
+        emailSent = result.success;
+
+        // Log the email
+        await supabase.from("email_logs").insert({
+          user_id,
+          status: result.success ? "sent" : "failed",
+        });
+
+        if (result.error) {
+          console.error("[agent/run] Email send failed:", result.error);
+          errors.push({ stage: "email", message: result.error });
+        } else {
+          console.log(`[agent/run] Digest email sent to ${user.digest_email}`);
+        }
+      }
+    } catch (err) {
+      console.error("[agent/run] Email step failed:", err instanceof Error ? err.message : err);
+      errors.push({ stage: "email", message: "Email step failed" });
+    }
+
     return Response.json({
       success: true,
       articles_count: articles.length,
       topics_processed: topics.length,
+      briefing_generated: !!briefing,
+      email_sent: emailSent,
       ...(errors.length > 0 ? { errors } : {}),
       debug,
     });

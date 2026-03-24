@@ -100,7 +100,7 @@ export async function sendDigestEmail(
 </html>`;
 
   const { error } = await resend.emails.send({
-    from: "Intel Feed <onboarding@resend.dev>",
+    from: "Intel Feed <nalvarez@mba2026.hbs.edu>",
     to,
     subject: `Your Intel Feed Briefing — ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`,
     html,

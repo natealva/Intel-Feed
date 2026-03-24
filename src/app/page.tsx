@@ -4,8 +4,9 @@ import { useState } from "react";
 import MyFeed from "@/components/MyFeed";
 import PodcastDigest from "@/components/PodcastDigest";
 import ActionCenter from "@/components/ActionCenter";
+import MySubscriptions from "@/components/MySubscriptions";
 
-const tabs = ["My Feed", "Podcast Digest", "Action Center"] as const;
+const tabs = ["My Feed", "Podcast Digest", "Action Center", "My Subscriptions"] as const;
 type Tab = (typeof tabs)[number];
 
 export default function Home() {
@@ -46,6 +47,7 @@ export default function Home() {
         {activeTab === "My Feed" && <MyFeed />}
         {activeTab === "Podcast Digest" && <PodcastDigest />}
         {activeTab === "Action Center" && <ActionCenter />}
+        {activeTab === "My Subscriptions" && <MySubscriptions />}
       </main>
     </div>
   );

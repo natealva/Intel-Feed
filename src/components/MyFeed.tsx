@@ -39,6 +39,8 @@ export default function MyFeed() {
   const [digestEmail, setDigestEmail] = useState<string | null>(null);
   const [emailInput, setEmailInput] = useState("");
   const [savingEmail, setSavingEmail] = useState(false);
+  const [sendingBriefing, setSendingBriefing] = useState(false);
+  const [briefingSentMsg, setBriefingSentMsg] = useState<string | null>(null);
 
   useEffect(() => {
     fetchTopics();
@@ -165,6 +167,28 @@ export default function MyFeed() {
     setSavingEmail(false);
   }
 
+  async function sendBriefingNow() {
+    setSendingBriefing(true);
+    setBriefingSentMsg(null);
+    try {
+      const res = await fetch("/api/send-briefing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: USER_ID }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setBriefingSentMsg(`Briefing sent to ${data.sent_to}!`);
+      } else {
+        setBriefingSentMsg(`Failed: ${data.error}`);
+      }
+    } catch {
+      setBriefingSentMsg("Failed to send briefing.");
+    } finally {
+      setSendingBriefing(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Topic management */}
@@ -241,18 +265,41 @@ export default function MyFeed() {
           Daily Email Digest
         </h2>
         {digestEmail ? (
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-zinc-600 dark:text-zinc-400">
-              Sending daily digest to{" "}
-              <span className="font-medium text-zinc-900 dark:text-zinc-50">{digestEmail}</span>
-            </p>
-            <button
-              onClick={unsubscribe}
-              disabled={savingEmail}
-              className="text-sm text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 font-medium disabled:opacity-50 transition-colors"
-            >
-              {savingEmail ? "Saving..." : "Unsubscribe"}
-            </button>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                Sending daily digest to{" "}
+                <span className="font-medium text-zinc-900 dark:text-zinc-50">{digestEmail}</span>
+              </p>
+              <button
+                onClick={unsubscribe}
+                disabled={savingEmail}
+                className="text-sm text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 font-medium disabled:opacity-50 transition-colors"
+              >
+                {savingEmail ? "Saving..." : "Unsubscribe"}
+              </button>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={sendBriefingNow}
+                disabled={sendingBriefing}
+                className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 dark:border-zinc-700 px-3 py-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {sendingBriefing ? (
+                  <>
+                    <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-700 dark:border-zinc-600 dark:border-t-zinc-200" />
+                    Sending...
+                  </>
+                ) : (
+                  "Send Briefing Now"
+                )}
+              </button>
+              {briefingSentMsg && (
+                <p className={`text-sm ${briefingSentMsg.startsWith("Failed") ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"}`}>
+                  {briefingSentMsg}
+                </p>
+              )}
+            </div>
           </div>
         ) : (
           <form

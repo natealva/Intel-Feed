@@ -50,6 +50,8 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "No topics found for user" }, { status: 404 });
     }
 
+    console.log(`[agent/run] user_id=${user_id}, topics_found=${topics.length}, topic_names=${topics.map((t) => t.name).join(", ")}`);
+
     const articles: Array<{
       user_id: string;
       topic_id: string;
@@ -59,9 +61,14 @@ export async function POST(request: NextRequest) {
       published_at: string;
     }> = [];
 
+    const debug: Array<Record<string, unknown>> = [];
+
     // For each topic, call Claude with web search to find recent news
     for (const topic of topics) {
+      const startTime = Date.now();
       try {
+        console.log(`[agent/run] Calling Claude for topic: "${topic.name}"`);
+
         const response = await anthropic.messages.create({
           model: "claude-sonnet-4-6",
           max_tokens: 1024,
@@ -80,19 +87,42 @@ export async function POST(request: NextRequest) {
           ],
         });
 
+        const elapsed = Date.now() - startTime;
+        const contentTypes = response.content.map((b) => b.type);
+
+        console.log(`[agent/run] Claude response for "${topic.name}": stop_reason=${response.stop_reason}, content_types=[${contentTypes.join(", ")}], elapsed=${elapsed}ms, usage=${JSON.stringify(response.usage)}`);
+
+        // Log full response content for debugging
+        const debugEntry: Record<string, unknown> = {
+          topic: topic.name,
+          elapsed_ms: elapsed,
+          stop_reason: response.stop_reason,
+          content_types: contentTypes,
+          usage: response.usage,
+          content_blocks: response.content.map((block) => {
+            if (block.type === "text") return { type: "text", text: block.text.slice(0, 500) };
+            if (block.type === "web_search_tool_result") return { type: "web_search_tool_result", content: JSON.stringify(block).slice(0, 500) };
+            return { type: block.type };
+          }),
+        };
+        debug.push(debugEntry);
+        console.log(`[agent/run] Full response for "${topic.name}":`, JSON.stringify(debugEntry));
+
         // Extract text from the response
         const textBlock = response.content.find((block) => block.type === "text");
         if (!textBlock || textBlock.type !== "text") {
           errors.push({
             topic: topic.name,
             stage: "anthropic_response",
-            message: `No text block in response. Content types: ${response.content.map((b) => b.type).join(", ")}`,
+            message: `No text block in response. Content types: ${contentTypes.join(", ")}, stop_reason: ${response.stop_reason}`,
           });
           continue;
         }
 
         // Parse the JSON from Claude's response — strip markdown fences if present
         let raw = textBlock.text.trim();
+        console.log(`[agent/run] Raw text for "${topic.name}" (first 300 chars): ${raw.slice(0, 300)}`);
+
         const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
         if (fenceMatch) {
           raw = fenceMatch[1].trim();
@@ -116,6 +146,8 @@ export async function POST(request: NextRequest) {
           continue;
         }
 
+        console.log(`[agent/run] Parsed ${parsed.length} articles for "${topic.name}"`);
+
         for (const item of parsed) {
           articles.push({
             user_id,
@@ -127,8 +159,10 @@ export async function POST(request: NextRequest) {
           });
         }
       } catch (err) {
+        const elapsed = Date.now() - startTime;
         const message = err instanceof Error ? err.message : String(err);
         const apiError = err as { status?: number; error?: { type?: string; message?: string } };
+        console.error(`[agent/run] Claude API error for "${topic.name}" (${elapsed}ms):`, message, JSON.stringify(apiError.error));
         errors.push({
           topic: topic.name,
           stage: "anthropic_call",
@@ -139,6 +173,8 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    console.log(`[agent/run] Total articles to insert: ${articles.length}`);
+
     // Insert all articles into Supabase
     if (articles.length > 0) {
       const { error: insertError } = await supabase
@@ -146,11 +182,13 @@ export async function POST(request: NextRequest) {
         .insert(articles);
 
       if (insertError) {
+        console.error(`[agent/run] Supabase insert failed:`, insertError.message);
         return Response.json(
-          { error: "Supabase insert failed", details: insertError.message },
+          { error: "Supabase insert failed", details: insertError.message, debug },
           { status: 500 }
         );
       }
+      console.log(`[agent/run] Inserted ${articles.length} articles successfully`);
     }
 
     return Response.json({
@@ -158,6 +196,7 @@ export async function POST(request: NextRequest) {
       articles_count: articles.length,
       topics_processed: topics.length,
       ...(errors.length > 0 ? { errors } : {}),
+      debug,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
